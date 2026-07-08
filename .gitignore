@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+hf_cache/
+processed_data/
+checkpoints/
+plots/
+logs/
+
+*.pt
+*.pth

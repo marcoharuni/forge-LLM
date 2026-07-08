@@ -1,0 +1,21 @@
+[project]
+name = "forge-llm"
+version = "0.1.0"
+description = "Research-grade small LLM pretraining code for Build a Small LLM in PyTorch From Scratch."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Marco Haruni" },
+]
+dependencies = [
+    "datasets",
+    "transformers",
+    "torchtune",
+    "torchao",
+    "matplotlib",
+    "numpy",
+    "tqdm",
+]
+
+[tool.uv]
+package = false

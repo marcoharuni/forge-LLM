@@ -23,16 +23,16 @@ The default model is an approximately 88.6M parameter decoder-only transformer:
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
-The project targets Python 3.10+ and PyTorch 2.x.
+The project targets Python 3.10+ and PyTorch 2.x. `uv` reads `pyproject.toml` and manages the environment for you. `requirements.txt` is kept with the exact dependency list for compatibility with plain `pip` workflows.
 
 ## Quick Smoke Test
 
 ```bash
-python tests/test_device_selection.py
-python -c "import models, optimizers, training, data, configs, utils"
+uv run python tests/test_device_selection.py
+uv run python -c "import models, optimizers, training, data, configs, utils"
 ```
 
 ## Dataset Preparation
@@ -40,7 +40,7 @@ python -c "import models, optimizers, training, data, configs, utils"
 To build the 70/30 FineWeb-Edu/Cosmopedia mix:
 
 ```bash
-python data/prepare_mix_data.py --target_tokens 22000000 --max_seq_len 2048
+uv run python data/prepare_mix_data.py --target_tokens 22000000 --max_seq_len 2048
 ```
 
 This writes `processed_data/pretrain_mix_{target_tokens}` with a `prep_metadata.json` file. The training CLI validates that the dataset sequence length matches the model config.
@@ -48,7 +48,7 @@ This writes `processed_data/pretrain_mix_{target_tokens}` with a `prep_metadata.
 To download the Blueberry pretraining dataset:
 
 ```bash
-python data/download_hf_data.py
+uv run python data/download_hf_data.py
 ```
 
 ## Training
@@ -56,14 +56,14 @@ python data/download_hf_data.py
 CPU smoke run:
 
 ```bash
-python train_llm.py --config 5m --train_tokens 50000 --batch_size 2 --device cpu --compile false
+uv run python train_llm.py --config 5m --train_tokens 50000 --batch_size 2 --device cpu --compile false
 ```
 
 Common runs:
 
 ```bash
-python train_llm.py --config default --device cuda
-python train_llm.py --config 25m --dataset_path processed_data/pretrain_mix_22000000 --device mps --compile false
+uv run python train_llm.py --config default --device cuda
+uv run python train_llm.py --config 25m --dataset_path processed_data/pretrain_mix_22000000 --device mps --compile false
 ```
 
 Config presets:
@@ -97,7 +97,7 @@ When `compile_model=True`, the trainer calls `torch.compile`, runs a few untimed
 After a small training run writes `checkpoints/model.pt`, generate text with:
 
 ```bash
-python generation/generate.py --checkpoint checkpoints/model.pt --prompt "The future of language models" --max_new_tokens 50 --device cpu
+uv run python generation/generate.py --checkpoint checkpoints/model.pt --prompt "The future of language models" --max_new_tokens 50 --device cpu
 ```
 
 Sampling supports greedy decoding, temperature, top-k, top-p, and optional repetition penalty.
@@ -109,7 +109,7 @@ Sampling supports greedy decoding, temperature, top-k, top-p, and optional repet
 ## Tests
 
 ```bash
-python tests/test_device_selection.py
+uv run python tests/test_device_selection.py
 ```
 
 Expected result: 4 tests pass.
