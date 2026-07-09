@@ -252,9 +252,87 @@ When training is finished, stop or terminate the rented GPU so you are not bille
 
 ### Provider Notes
 
+- Modal: `modal_train.py` contains a ready-to-run serverless GPU workflow using
+  a persistent Modal Volume for datasets, checkpoints, reports, and Hugging Face
+  cache. Authenticate once from your local machine:
+
+```bash
+uvx modal setup
+```
+
+Then verify that Modal can start a CUDA GPU:
+
+```bash
+uvx modal run modal_train.py --action check
+```
+
+Run a tiny end-to-end smoke test:
+
+```bash
+uvx modal run modal_train.py --action smoke
+```
+
+Prepare the 22M-token mix on the Modal Volume:
+
+```bash
+uvx modal run --detach modal_train.py \
+  --action prepare \
+  --dataset-tokens 22000000 \
+  --max-seq-len 512
+```
+
+Train the 5m model on an L4 GPU:
+
+```bash
+uvx modal run --detach modal_train.py \
+  --action train \
+  --run-name run-5m-134m \
+  --config 5m \
+  --train-tokens 134000000 \
+  --dataset-tokens 22000000 \
+  --max-seq-len 512 \
+  --batch-size 8
+```
+
+Generate from the saved checkpoint:
+
+```bash
+uvx modal run modal_train.py \
+  --action generate \
+  --run-name run-5m-134m \
+  --prompt "The future of language models"
+```
+
+Download a report or checkpoint from the Modal Volume:
+
+```bash
+uvx modal volume get forge-llm-data \
+  /checkpoints/run-5m-134m/training_report.md \
+  ./checkpoints/run-5m-134m-training_report.md
+```
+
+Modal runs store artifacts in the `forge-llm-data` Volume. Download only the
+artifacts you want to inspect locally; do not commit checkpoints, generated
+datasets, logs, or plots.
+
 - RunPod: use a Pod for training, preferably with a PyTorch template. RunPod documents Pod setup and SSH access in their [Pods overview](https://docs.runpod.io/pods/overview) and [SSH guide](https://docs.runpod.io/pods/configuration/use-ssh).
 - Lambda, Paperspace, Vast, CoreWeave, AWS, GCP, Azure: choose a PyTorch/CUDA image, connect by SSH or Jupyter, verify `nvidia-smi`, clone the repo, then run the same commands above.
 - Managed notebooks: use the Colab-style commands below, but remember that notebook runtimes are usually less persistent than a normal VM.
+
+### Plot Training Metrics
+
+After downloading a `metrics.csv` file, generate a browser-readable SVG
+dashboard with only the Python standard library:
+
+```bash
+python3 scripts/plot_run_metrics_svg.py \
+  checkpoints/run-5m-134m-metrics.csv \
+  --output plots/run-5m-134m-metrics.svg \
+  --title "5m model, 134M tokens"
+```
+
+The SVG shows training loss, validation loss, validation perplexity,
+throughput, average throughput, and CUDA memory.
 
 ### Colab A100 Notebook Workflow
 
