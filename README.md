@@ -213,27 +213,63 @@ In Colab:
 2. Choose **Runtime > Change runtime type**.
 3. Select **GPU**.
 4. If the UI offers GPU class selection, choose **A100**.
-5. Run:
+5. Verify the GPU:
 
 ```python
 !nvidia-smi
 ```
 
-Then install and verify forge-LLM:
+Clone the repo:
 
 ```python
 !git clone https://github.com/marcoharuni/forge-LLM.git
+```
+
+Enter the repo:
+
+```python
 %cd forge-LLM
+```
+
+Install `uv`:
+
+```python
 !pip install uv
+```
+
+Install dependencies:
+
+```python
 !uv sync
+```
+
+Run the device tests:
+
+```python
 !uv run python tests/test_device_selection.py
+```
+
+Check the training CLI:
+
+```python
 !uv run python train_llm.py --help
+```
+
+If Hugging Face prints an unauthenticated-request warning, the command can still work. For higher rate limits, add an `HF_TOKEN` secret in Colab and run:
+
+```python
+from google.colab import userdata
+import os
+
+hf_token = userdata.get("HF_TOKEN")
+if hf_token:
+    os.environ["HF_TOKEN"] = hf_token
 ```
 
 Prepare a small dataset:
 
 ```python
-!uv run python data/prepare_mix_data.py --target_tokens 22000000 --max_seq_len 2048
+!uv run python data/prepare_mix_data.py --target_tokens 1000000 --max_seq_len 512
 ```
 
 Start with a small CUDA run:
@@ -244,7 +280,8 @@ Start with a small CUDA run:
   --train_tokens 50000 \
   --batch_size 2 \
   --device cuda \
-  --dataset_path processed_data/pretrain_mix_22000000
+  --compile false \
+  --dataset_path processed_data/pretrain_mix_1000000
 ```
 
 Colab VMs are temporary. Download your outputs before disconnecting, or copy them to Google Drive:

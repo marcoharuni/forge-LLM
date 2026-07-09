@@ -31,7 +31,12 @@ def tokenize_and_chunk(dataset, tokenizer, config):
     seq_length = config.seq_length
 
     def tokenize_batch(examples):
-        tokenized = tokenizer(examples[text_column], add_special_tokens=False)
+        tokenized = tokenizer(
+            examples[text_column],
+            add_special_tokens=False,
+            truncation=False,
+            verbose=False,
+        )
         all_ids = []
         for ids in tokenized["input_ids"]:
             all_ids.extend(ids)

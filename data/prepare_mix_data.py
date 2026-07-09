@@ -42,7 +42,12 @@ def main():
         tmp_path = tmp.name
         for subset, limit in [("fineweb-edu-dedup", fineweb_docs), ("cosmopedia-v2", cosmopedia_docs)]:
             for row in stream_subset(subset, limit):
-                ids = tokenizer(row.get("text", ""), add_special_tokens=False)["input_ids"]
+                ids = tokenizer(
+                    row.get("text", ""),
+                    add_special_tokens=False,
+                    truncation=False,
+                    verbose=False,
+                )["input_ids"]
                 for i in range(0, len(ids) - args.max_seq_len + 1, args.max_seq_len):
                     chunk = ids[i : i + args.max_seq_len]
                     record = {"input_ids": chunk, "labels": list(chunk)}
