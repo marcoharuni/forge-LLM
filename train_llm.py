@@ -4,7 +4,14 @@ import importlib
 import json
 import os
 import random
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*KernelPreference.*",
+    category=FutureWarning,
+)
 
 import torch
 from torch.utils.data import DataLoader

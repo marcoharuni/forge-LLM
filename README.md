@@ -97,7 +97,7 @@ When `compile_model=True`, the trainer calls `torch.compile`, runs a few untimed
 After a small training run writes `checkpoints/model.pt`, generate text with:
 
 ```bash
-uv run python generation/generate.py --checkpoint checkpoints/model.pt --prompt "The future of language models" --max_new_tokens 50 --device cpu
+uv run python generation/generate.py --checkpoint checkpoints/model.pt --prompt "The future of language models" --max_new_tokens 50 --temperature 0.7 --top_k 50 --top_p 0.9 --device cpu
 ```
 
 Sampling supports greedy decoding, temperature, top-k, top-p, and optional repetition penalty.
@@ -294,6 +294,9 @@ Generate text from the checkpoint:
   --checkpoint checkpoints/model.pt \
   --prompt "The future of language models" \
   --max_new_tokens 50 \
+  --temperature 0.7 \
+  --top_k 50 \
+  --top_p 0.9 \
   --device cuda
 ```
 

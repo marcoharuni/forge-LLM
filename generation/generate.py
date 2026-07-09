@@ -1,6 +1,13 @@
 import argparse
+import warnings
 from pathlib import Path
 import sys
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*KernelPreference.*",
+    category=FutureWarning,
+)
 
 import torch
 from transformers import AutoTokenizer
@@ -43,9 +50,9 @@ def generate_text(
     checkpoint,
     prompt,
     max_new_tokens=50,
-    temperature=1.0,
-    top_k=None,
-    top_p=None,
+    temperature=0.7,
+    top_k=50,
+    top_p=0.9,
     device="auto",
     tokenizer_name="HuggingFaceTB/SmolLM2-135M",
     repetition_penalty=None,
@@ -81,9 +88,9 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--max_new_tokens", type=int, default=50)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top_k", type=int, default=None)
-    parser.add_argument("--top_p", type=float, default=None)
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top_k", type=int, default=50)
+    parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default="auto")
     args = parser.parse_args()
     generate_text(**vars(args))
