@@ -66,6 +66,15 @@ uv run python train_llm.py --config default --device cuda
 uv run python train_llm.py --config 25m --dataset_path processed_data/pretrain_mix_22000000 --device mps --compile false
 ```
 
+Training writes practical run artifacts to `--output_dir`:
+
+- `model.pt`: checkpoint weights for generation or later loading
+- `metrics.json`: final metrics plus the full in-memory metrics history
+- `metrics.jsonl`: line-by-line training/evaluation records while the run is active
+- `metrics.csv`: spreadsheet-friendly metrics after the run finishes
+
+The `plots/` directory also receives timestamped `metrics_*.json` and `val_loss_*.png` files. The logged fields include training loss, validation loss, perplexity, learning rates, gradient norm, tokens/sec, step time, elapsed time, and CUDA memory when available.
+
 Config presets:
 
 - `default`: about 88.6M parameters, short default token budget for smoke research runs
@@ -104,7 +113,7 @@ Sampling supports greedy decoding, temperature, top-k, top-p, and optional repet
 
 ## Device Support
 
-`--device auto` selects CUDA when available, then Apple MPS, then CPU. CUDA training uses bfloat16 model weights and `torch.amp`; CPU and MPS keep default dtype.
+`--device auto` selects CUDA when available, then Apple MPS, then CPU. CUDA training uses `torch.amp`. On CUDA GPUs with native bf16, forge-LLM uses bf16 model weights and autocast. On older CUDA GPUs without bf16, it falls back to fp16 autocast with `GradScaler`. CPU and MPS keep default dtype.
 
 ## Training On A Cloud GPU
 

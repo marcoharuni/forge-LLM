@@ -1,4 +1,5 @@
 import copy
+import csv
 import json
 import math
 import time
@@ -113,6 +114,64 @@ def _strip_compile_prefix(state_dict):
     }
 
 
+def _build_grad_scaler(device, amp_dtype, use_amp: bool):
+    enabled = bool(use_amp and device.type == "cuda" and amp_dtype == torch.float16)
+    return torch.amp.GradScaler("cuda", enabled=enabled)
+
+
+def _current_lrs(optimizers):
+    lrs = {}
+    for optimizer_index, optimizer in enumerate(optimizers):
+        for group_index, group in enumerate(optimizer.param_groups):
+            lrs[f"lr_{optimizer_index}_{group_index}"] = group["lr"]
+    return lrs
+
+
+def _cuda_memory_gb(device):
+    if device.type != "cuda":
+        return None
+    return torch.cuda.max_memory_allocated(device) / (1024**3)
+
+
+def _json_default(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().item()
+    return str(value)
+
+
+def _append_jsonl(path: Path | None, record: dict) -> None:
+    if path is None:
+        return
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, default=_json_default) + "\n")
+
+
+def _write_metrics_csv(path: Path, records: list[dict]) -> None:
+    if not records:
+        return
+    preferred = [
+        "type",
+        "step",
+        "tokens_seen",
+        "train_loss",
+        "val_loss",
+        "val_accuracy",
+        "val_perplexity",
+        "grad_norm",
+        "tokens_per_sec",
+        "total_tokens_per_sec",
+        "step_time_seconds",
+        "gpu_memory_gb",
+        "elapsed_seconds",
+    ]
+    fieldnames = [field for field in preferred if any(field in record for record in records)]
+    extras = sorted({key for record in records for key in record} - set(fieldnames))
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames + extras)
+        writer.writeheader()
+        writer.writerows(records)
+
+
 def train_model(
     model,
     config,
@@ -135,8 +194,24 @@ def train_model(
     print(describe_device(device))
 
     schedulers = schedulers or []
+    scaler = _build_grad_scaler(device, amp_dtype, config.use_amp)
+    if scaler.is_enabled():
+        print("AMP: fp16 autocast with GradScaler enabled.")
+    elif config.use_amp and device.type == "cuda":
+        print(f"AMP: {amp_dtype} autocast without GradScaler.")
+
+    output_path = Path(output_dir) if output_dir else None
+    metrics_jsonl_path = None
+    if output_path is not None:
+        output_path.mkdir(parents=True, exist_ok=True)
+        metrics_jsonl_path = output_path / "metrics.jsonl"
+        metrics_jsonl_path.write_text("")
+
     model.train()
     start_time = time.time()
+    last_log_time = start_time
+    last_log_tokens = 0
+    last_log_step = 0
     tokens_seen = 0
     steps = 0
     micro_steps = 0
@@ -165,37 +240,85 @@ def train_model(
                 )
                 loss = loss / config.gradient_accumulation_steps
 
-            loss.backward()
+            if scaler.is_enabled():
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             micro_steps += 1
             batch_tokens = int(x.numel())
             tokens_seen += batch_tokens
             progress.update(batch_tokens)
 
             if micro_steps % config.gradient_accumulation_steps == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-                for optimizer in optimizers:
-                    optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)
+                if scaler.is_enabled():
+                    for optimizer in optimizers:
+                        scaler.unscale_(optimizer)
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    config.grad_clip,
+                )
+                if scaler.is_enabled():
+                    for optimizer in optimizers:
+                        scaler.step(optimizer)
+                    scaler.update()
+                    for optimizer in optimizers:
+                        optimizer.zero_grad(set_to_none=True)
+                else:
+                    for optimizer in optimizers:
+                        optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
                 for scheduler in schedulers:
                     scheduler.step()
                 steps += 1
 
-                if steps % 100 == 0 or last_loss is None:
+                should_log = steps % log_every == 0
+                if steps % 100 == 0 or last_loss is None or should_log:
                     last_loss = loss.detach().float().item() * config.gradient_accumulation_steps
 
-                if steps % log_every == 0:
+                if should_log:
+                    now = time.time()
+                    elapsed_since_log = max(1e-9, now - last_log_time)
+                    elapsed_total = max(1e-9, now - start_time)
+                    log_step_delta = max(1, steps - last_log_step)
                     record = {
+                        "type": "train",
                         "step": steps,
                         "tokens_seen": tokens_seen,
                         "train_loss": last_loss,
+                        "grad_norm": float(total_grad_norm.detach().cpu()),
+                        "tokens_per_sec": (tokens_seen - last_log_tokens) / elapsed_since_log,
+                        "total_tokens_per_sec": tokens_seen / elapsed_total,
+                        "step_time_seconds": elapsed_since_log / log_step_delta,
+                        "gpu_memory_gb": _cuda_memory_gb(device),
+                        "elapsed_seconds": elapsed_total,
                     }
+                    record.update(_current_lrs(optimizers))
                     metrics_history.append(record)
-                    progress.set_postfix(record)
+                    _append_jsonl(metrics_jsonl_path, record)
+                    progress.set_postfix(
+                        {
+                            "loss": f"{last_loss:.4f}",
+                            "tok/s": f"{record['tokens_per_sec']:.0f}",
+                            "grad": f"{record['grad_norm']:.2f}",
+                        }
+                    )
+                    last_log_time = now
+                    last_log_tokens = tokens_seen
+                    last_log_step = steps
 
                 if val_loader is not None and _should_evaluate(config, steps, eval_seen):
                     metrics = evaluate_model(model, val_loader, config)
-                    metrics.update({"step": steps, "tokens_seen": tokens_seen})
+                    metrics.update(
+                        {
+                            "type": "eval",
+                            "step": steps,
+                            "tokens_seen": tokens_seen,
+                            "elapsed_seconds": time.time() - start_time,
+                        }
+                    )
+                    metrics.update(_current_lrs(optimizers))
                     metrics_history.append(metrics)
+                    _append_jsonl(metrics_jsonl_path, metrics)
                     print(f"eval step={steps} tokens={tokens_seen:,} loss={metrics['val_loss']:.4f}")
                     if early_stopper is not None and early_stopper(metrics["val_loss"], steps):
                         tokens_seen = config.train_tokens
@@ -205,8 +328,17 @@ def train_model(
     final_metrics = {}
     if val_loader is not None:
         final_metrics = evaluate_model(model, val_loader, config)
-        final_metrics.update({"step": steps, "tokens_seen": tokens_seen})
+        final_metrics.update(
+            {
+                "type": "final_eval",
+                "step": steps,
+                "tokens_seen": tokens_seen,
+                "elapsed_seconds": time.time() - start_time,
+            }
+        )
+        final_metrics.update(_current_lrs(optimizers))
         metrics_history.append(final_metrics)
+        _append_jsonl(metrics_jsonl_path, final_metrics)
 
     training_time = time.time() - start_time
     result = {
@@ -218,9 +350,7 @@ def train_model(
         "tokens_seen": tokens_seen,
     }
 
-    if output_dir:
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+    if output_path is not None:
         serializable = {
             "final_metrics": final_metrics,
             "metrics_history": metrics_history,
@@ -229,7 +359,8 @@ def train_model(
             "tokens_seen": tokens_seen,
             "extra_config": extra_config or {},
         }
-        (output_path / "metrics.json").write_text(json.dumps(serializable, indent=2))
+        (output_path / "metrics.json").write_text(json.dumps(serializable, indent=2, default=_json_default))
+        _write_metrics_csv(output_path / "metrics.csv", metrics_history)
         torch.save(
             {
                 "model_state_dict": _unwrap_model(model).state_dict(),
@@ -245,6 +376,7 @@ def warmup_compiled_kernels(model, config, train_loader, device, num_steps: int 
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     amp_dtype = cuda_training_dtype() if device.type == "cuda" else torch.float32
+    scaler = _build_grad_scaler(device, amp_dtype, config.use_amp)
     for step, batch in enumerate(train_loader):
         if step >= num_steps:
             break
@@ -262,8 +394,13 @@ def warmup_compiled_kernels(model, config, train_loader, device, num_steps: int 
                 shift_labels.view(-1),
                 ignore_index=-100,
             )
-        loss.backward()
-        optimizer.step()
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
 
 def _build_schedulers(optimizers, config):
