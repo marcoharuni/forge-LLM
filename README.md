@@ -106,6 +106,154 @@ Sampling supports greedy decoding, temperature, top-k, top-p, and optional repet
 
 `--device auto` selects CUDA when available, then Apple MPS, then CPU. CUDA training uses bfloat16 model weights and `torch.amp`; CPU and MPS keep default dtype.
 
+## Training On A Cloud GPU
+
+You can train forge-LLM on any rented NVIDIA GPU machine that gives you a normal Linux shell: RunPod, Lambda, Vast, Paperspace, CoreWeave, AWS, GCP, Azure, a university cluster, or a lab workstation. The provider does not matter much. What matters is that the instance has:
+
+- an NVIDIA GPU visible to PyTorch through CUDA
+- recent NVIDIA drivers
+- enough VRAM for the config you choose
+- persistent storage for datasets and checkpoints
+- SSH, Jupyter, or a web terminal
+
+Recommended starting points:
+
+- `5m`: 8-12 GB VRAM is enough for small smoke runs
+- `25m`: 16 GB VRAM is a good practical target
+- `50m`: 24 GB VRAM is more comfortable
+- `default` / `100m`: 24 GB minimum, 48 GB preferred
+
+On any vendor, start from a PyTorch/CUDA image if one is offered. Avoid bare Ubuntu images unless you are comfortable installing NVIDIA drivers and CUDA tooling yourself.
+
+### Generic SSH Workflow
+
+On your local machine, generate an SSH key if you do not already have one:
+
+```bash
+ssh-keygen -t ed25519 -C "you@example.com"
+cat ~/.ssh/id_ed25519.pub
+```
+
+Add the printed public key to your cloud GPU provider. Create a GPU instance, then copy the SSH command from the provider dashboard. It usually looks like one of these:
+
+```bash
+ssh root@PUBLIC_IP -p SSH_PORT -i ~/.ssh/id_ed25519
+ssh ubuntu@PUBLIC_IP -i ~/.ssh/id_ed25519
+ssh USERNAME@HOSTNAME -i ~/.ssh/id_ed25519
+```
+
+After connecting to the GPU machine:
+
+```bash
+nvidia-smi
+git clone https://github.com/marcoharuni/forge-LLM.git
+cd forge-LLM
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc
+uv sync
+uv run python tests/test_device_selection.py
+uv run python train_llm.py --help
+```
+
+If `nvidia-smi` does not show a GPU, fix the cloud image/driver/runtime before training.
+
+Prepare data on the GPU machine, or upload a prepared dataset into `processed_data/`:
+
+```bash
+uv run python data/prepare_mix_data.py --target_tokens 22000000 --max_seq_len 2048
+```
+
+Start with a small CUDA run:
+
+```bash
+uv run python train_llm.py \
+  --config 5m \
+  --train_tokens 50000 \
+  --batch_size 2 \
+  --device cuda \
+  --dataset_path processed_data/pretrain_mix_22000000
+```
+
+For longer SSH runs, use `tmux` so training continues if your SSH session drops:
+
+```bash
+tmux new -s forge
+uv run python train_llm.py --config 25m --device cuda --dataset_path processed_data/pretrain_mix_22000000
+```
+
+Detach with `Ctrl-b` then `d`, and reconnect later with:
+
+```bash
+tmux attach -t forge
+```
+
+Keep important outputs on persistent storage. On rented GPUs, local container storage may disappear when the machine is deleted. Save or download:
+
+- `checkpoints/`
+- `plots/`
+- `processed_data/`
+
+When training is finished, stop or terminate the rented GPU so you are not billed for idle time.
+
+### Provider Notes
+
+- RunPod: use a Pod for training, preferably with a PyTorch template. RunPod documents Pod setup and SSH access in their [Pods overview](https://docs.runpod.io/pods/overview) and [SSH guide](https://docs.runpod.io/pods/configuration/use-ssh).
+- Lambda, Paperspace, Vast, CoreWeave, AWS, GCP, Azure: choose a PyTorch/CUDA image, connect by SSH or Jupyter, verify `nvidia-smi`, clone the repo, then run the same commands above.
+- Managed notebooks: use the Colab-style commands below, but remember that notebook runtimes are usually less persistent than a normal VM.
+
+### Colab A100 Notebook Workflow
+
+Google Colab can run this repo in a notebook. GPU type, runtime length, and availability vary over time; Colab's own FAQ says GPU types and limits are not guaranteed and may change. If you specifically want an A100, use a paid Colab option when available and select an A100 runtime from the Colab UI.
+
+In Colab:
+
+1. Open a new notebook.
+2. Choose **Runtime > Change runtime type**.
+3. Select **GPU**.
+4. If the UI offers GPU class selection, choose **A100**.
+5. Run:
+
+```python
+!nvidia-smi
+```
+
+Then install and verify forge-LLM:
+
+```python
+!git clone https://github.com/marcoharuni/forge-LLM.git
+%cd forge-LLM
+!pip install uv
+!uv sync
+!uv run python tests/test_device_selection.py
+!uv run python train_llm.py --help
+```
+
+Prepare a small dataset:
+
+```python
+!uv run python data/prepare_mix_data.py --target_tokens 22000000 --max_seq_len 2048
+```
+
+Start with a small CUDA run:
+
+```python
+!uv run python train_llm.py \
+  --config 5m \
+  --train_tokens 50000 \
+  --batch_size 2 \
+  --device cuda \
+  --dataset_path processed_data/pretrain_mix_22000000
+```
+
+Colab VMs are temporary. Download your outputs before disconnecting, or copy them to Google Drive:
+
+```python
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+Then copy `checkpoints/`, `plots/`, and any prepared datasets you want to keep into Drive. For serious long-running pretraining, a normal cloud GPU VM with persistent storage is usually better than Colab.
+
 ## Tests
 
 ```bash
