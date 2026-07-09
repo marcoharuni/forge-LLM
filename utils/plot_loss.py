@@ -2,6 +2,7 @@ import json
 import os
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+os.environ["MPLBACKEND"] = "Agg"
 import matplotlib.pyplot as plt
 
 

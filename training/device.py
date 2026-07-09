@@ -37,3 +37,9 @@ def describe_device(device: torch.device) -> str:
     if device.type == "mps":
         return "Apple Metal Performance Shaders (MPS)"
     return "CPU"
+
+
+def cuda_training_dtype() -> torch.dtype:
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16

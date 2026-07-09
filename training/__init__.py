@@ -1,4 +1,4 @@
-from .device import DEVICE_CHOICES, describe_device, resolve_device
+from .device import DEVICE_CHOICES, cuda_training_dtype, describe_device, resolve_device
 from .evaluation import evaluate_model
 from .trainer import (
     EarlyStopping,
@@ -12,6 +12,7 @@ __all__ = [
     "DEVICE_CHOICES",
     "resolve_device",
     "describe_device",
+    "cuda_training_dtype",
     "evaluate_model",
     "EarlyStopping",
     "setup_muon_optimizer",

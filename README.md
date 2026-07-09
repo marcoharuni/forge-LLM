@@ -123,6 +123,8 @@ Recommended starting points:
 - `50m`: 24 GB VRAM is more comfortable
 - `default` / `100m`: 24 GB minimum, 48 GB preferred
 
+Older GPUs such as T4 can run small tests, but they do not have native bf16. forge-LLM falls back to fp16 on CUDA GPUs without bf16 support. For smoother longer training, prefer Ampere/Ada/Hopper GPUs such as A100, RTX 3090, RTX 4090, L4, L40S, or H100.
+
 On any vendor, start from a PyTorch/CUDA image if one is offered. Avoid bare Ubuntu images unless you are comfortable installing NVIDIA drivers and CUDA tooling yourself.
 
 ### Generic SSH Workflow

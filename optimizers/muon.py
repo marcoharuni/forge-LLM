@@ -12,7 +12,10 @@ coeffs_list = [
 
 @torch.compile
 def zeropower_polar_express(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    X = G.bfloat16()
+    if G.is_cuda and not torch.cuda.is_bf16_supported():
+        X = G.float()
+    else:
+        X = G.bfloat16()
     transposed = X.size(-2) > X.size(-1)
     if transposed:
         X = X.mT

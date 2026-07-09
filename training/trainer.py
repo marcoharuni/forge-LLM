@@ -15,7 +15,7 @@ from models import MinimalLLM
 from optimizers import Muon
 from utils.helpers import count_parameters, format_time, set_seed
 from utils.plot_loss import plot_loss
-from .device import describe_device, resolve_device
+from .device import cuda_training_dtype, describe_device, resolve_device
 from .evaluation import evaluate_model
 
 
@@ -127,8 +127,10 @@ def train_model(
 ):
     device = resolve_device(config.device)
     if device.type == "cuda":
-        model.to(device, dtype=torch.bfloat16)
+        amp_dtype = cuda_training_dtype()
+        model.to(device, dtype=amp_dtype)
     else:
+        amp_dtype = torch.float32
         model.to(device)
     print(describe_device(device))
 
@@ -152,7 +154,7 @@ def train_model(
             y = y.to(device, non_blocking=True)
 
             autocast_enabled = config.use_amp and device.type == "cuda"
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
+            with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=autocast_enabled):
                 logits = model(x)
                 shift_labels = torch.full_like(y, -100)
                 shift_labels[:, :-1] = y[:, 1:]
@@ -242,6 +244,7 @@ def train_model(
 def warmup_compiled_kernels(model, config, train_loader, device, num_steps: int = 3):
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    amp_dtype = cuda_training_dtype() if device.type == "cuda" else torch.float32
     for step, batch in enumerate(train_loader):
         if step >= num_steps:
             break
@@ -250,7 +253,7 @@ def warmup_compiled_kernels(model, config, train_loader, device, num_steps: int 
         y = y.to(device)
         optimizer.zero_grad(set_to_none=True)
         autocast_enabled = config.use_amp and device.type == "cuda"
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
+        with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=autocast_enabled):
             logits = model(x)
             shift_labels = torch.full_like(y, -100)
             shift_labels[:, :-1] = y[:, 1:]
@@ -298,7 +301,7 @@ def train_minimal_llm(
     model = MinimalLLM(config)
     device = resolve_device(config.device)
     if device.type == "cuda":
-        model.to(device, dtype=torch.bfloat16)
+        model.to(device, dtype=cuda_training_dtype())
     else:
         model.to(device)
 
@@ -324,7 +327,7 @@ def train_minimal_llm(
             print(f"torch.compile failed; falling back to eager mode: {exc}")
             model = MinimalLLM(config)
             if device.type == "cuda":
-                model.to(device, dtype=torch.bfloat16)
+                model.to(device, dtype=cuda_training_dtype())
             else:
                 model.to(device)
             model.load_state_dict(snapshot, strict=True)
