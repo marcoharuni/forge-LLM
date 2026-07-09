@@ -35,6 +35,11 @@ uv run python tests/test_device_selection.py
 uv run python -c "import models, optimizers, training, data, configs, utils"
 ```
 
+## Book Companion Guides
+
+- [Book blueprint](docs/book_blueprint.md): chapter-by-chapter plan for the companion book.
+- [Debugging and expectations](docs/debugging_and_expectations.md): common warnings, smoke-run expectations, and first-run fixes.
+
 ## Dataset Preparation
 
 To build the 70/30 FineWeb-Edu/Cosmopedia mix:

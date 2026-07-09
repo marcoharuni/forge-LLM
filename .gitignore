@@ -12,5 +12,8 @@ checkpoints/
 plots/
 logs/
 
+# Avoid accidentally committing a nested clone created during local/Colab tests.
+forge-LLM/
+
 *.pt
 *.pth
