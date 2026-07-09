@@ -145,7 +145,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", default="./checkpoints")
     parser.add_argument("--load_checkpoint", default=None)
+    parser.add_argument("--resume_checkpoint", default=None)
+    parser.add_argument("--report_prompt", default="The future of language models")
+    parser.add_argument("--report_max_new_tokens", type=int, default=50)
     args = parser.parse_args()
+    if args.load_checkpoint and args.resume_checkpoint:
+        raise SystemExit("Use either --load_checkpoint or --resume_checkpoint, not both.")
 
     set_seed(args.seed)
     config_cls = import_config_class(args.config_class) if args.config_class else CONFIGS[args.config]
@@ -243,6 +248,10 @@ def main():
         val_loader,
         output_dir=args.output_dir,
         load_weights_path=args.load_checkpoint,
+        resume_checkpoint=args.resume_checkpoint,
+        report_tokenizer_name=data_cfg.tokenizer_name,
+        report_prompt=args.report_prompt,
+        report_max_new_tokens=args.report_max_new_tokens,
     )
 
 

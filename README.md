@@ -35,6 +35,14 @@ uv run python tests/test_device_selection.py
 uv run python -c "import models, optimizers, training, data, configs, utils"
 ```
 
+To run the full tiny loop in one command:
+
+```bash
+uv run python scripts/smoke_train_generate.py --device cpu --overwrite
+```
+
+This prepares tiny local text data, trains the 5m model briefly, saves checkpoints and metrics, writes a training report, then generates text from the checkpoint. The output may be messy; the point is to prove the full path works.
+
 ## Dataset Preparation
 
 To build the 70/30 FineWeb-Edu/Cosmopedia mix:
@@ -90,11 +98,26 @@ uv run python train_llm.py --config 25m --dataset_path processed_data/pretrain_m
 Training writes practical run artifacts to `--output_dir`:
 
 - `model.pt`: checkpoint weights for generation or later loading
+- `training_state.pt`: full resume state with model, optimizers, schedulers, counters, RNG state, config, and metrics
 - `metrics.json`: final metrics plus the full in-memory metrics history
 - `metrics.jsonl`: line-by-line training/evaluation records while the run is active
 - `metrics.csv`: spreadsheet-friendly metrics after the run finishes
+- `training_report.md`: run summary with config, device, tokens, best validation loss, final perplexity, throughput, and a sample generation when possible
 
 The `plots/` directory also receives timestamped `metrics_*.json` and `val_loss_*.png` files. The logged fields include training loss, validation loss, perplexity, learning rates, gradient norm, tokens/sec, step time, elapsed time, and CUDA memory when available.
+
+To resume a full interrupted run:
+
+```bash
+uv run python train_llm.py \
+  --config 5m \
+  --device cuda \
+  --dataset_path processed_data/domain_text \
+  --max_seq_len 512 \
+  --resume_checkpoint checkpoints/training_state.pt
+```
+
+Use `--load_checkpoint` only when you want to load model weights without optimizer/scheduler/RNG state. Use `--resume_checkpoint` when continuing the same training run.
 
 Config presets:
 
@@ -345,9 +368,14 @@ Then copy `checkpoints/`, `plots/`, and any prepared datasets you want to keep i
 
 ```bash
 uv run python tests/test_device_selection.py
+uv run python tests/test_model_architecture.py
+uv run python tests/test_optimizer_routing.py
+uv run python tests/test_sampler.py
+uv run python tests/test_data_chunking.py
+uv run python tests/test_checkpoint_resume.py
 ```
 
-Expected result: 4 tests pass.
+The tests cover device selection, parameter counts, weight tying, forward shape/no NaNs, optimizer routing, Muon step, sampler behavior, data chunking, and checkpoint resume state.
 
 ## Notes On Reproducibility
 

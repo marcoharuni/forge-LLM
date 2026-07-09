@@ -2,16 +2,20 @@ import copy
 import csv
 import json
 import math
+import random
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from configs import LLMConfig
+from generation.sampler import sample_next_token
 from models import MinimalLLM
 from optimizers import Muon
 from utils.helpers import count_parameters, format_time, set_seed
@@ -172,6 +176,221 @@ def _write_metrics_csv(path: Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def _rng_state():
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state):
+    if not state:
+        return
+    if "python" in state:
+        random.setstate(state["python"])
+    if "numpy" in state:
+        np.random.set_state(state["numpy"])
+    if "torch" in state:
+        torch.set_rng_state(state["torch"])
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _best_val_record(records):
+    val_records = [record for record in records if "val_loss" in record]
+    if not val_records:
+        return {}
+    return min(val_records, key=lambda record: record["val_loss"])
+
+
+def _average_metric(records, key):
+    values = [record[key] for record in records if key in record and record[key] is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _training_state_dict(
+    model,
+    config,
+    optimizers,
+    schedulers,
+    scaler,
+    steps,
+    tokens_seen,
+    micro_steps,
+    metrics_history,
+    eval_seen,
+    training_time,
+    extra_config,
+):
+    return {
+        "model_state_dict": _unwrap_model(model).state_dict(),
+        "optimizer_state_dicts": [optimizer.state_dict() for optimizer in optimizers],
+        "scheduler_state_dicts": [scheduler.state_dict() for scheduler in schedulers],
+        "scaler_state_dict": scaler.state_dict() if scaler is not None else None,
+        "steps": steps,
+        "tokens_seen": tokens_seen,
+        "micro_steps": micro_steps,
+        "metrics_history": metrics_history,
+        "eval_seen": sorted(eval_seen),
+        "training_time": training_time,
+        "config": config.__dict__,
+        "extra_config": extra_config or {},
+        "rng_state": _rng_state(),
+        "best_val": _best_val_record(metrics_history),
+    }
+
+
+def _save_training_checkpoint(
+    path,
+    model,
+    config,
+    optimizers,
+    schedulers,
+    scaler,
+    steps,
+    tokens_seen,
+    micro_steps,
+    metrics_history,
+    eval_seen,
+    training_time,
+    extra_config,
+):
+    torch.save(
+        _training_state_dict(
+            model=model,
+            config=config,
+            optimizers=optimizers,
+            schedulers=schedulers,
+            scaler=scaler,
+            steps=steps,
+            tokens_seen=tokens_seen,
+            micro_steps=micro_steps,
+            metrics_history=metrics_history,
+            eval_seen=eval_seen,
+            training_time=training_time,
+            extra_config=extra_config,
+        ),
+        path,
+    )
+
+
+def _load_training_state(path):
+    if path is None:
+        return None
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+@torch.no_grad()
+def _generate_report_sample(
+    model,
+    config,
+    device,
+    tokenizer_name,
+    prompt,
+    max_new_tokens,
+):
+    if not prompt or max_new_tokens <= 0:
+        return ""
+
+    was_training = model.training
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"].to(device)
+    for _ in range(max_new_tokens):
+        context = input_ids[:, -config.max_seq_len :]
+        logits = model(context)[:, -1, :]
+        next_token = sample_next_token(
+            logits,
+            input_ids,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.9,
+        )
+        input_ids = torch.cat([input_ids, next_token], dim=1)
+        if tokenizer.eos_token_id is not None and next_token.item() == tokenizer.eos_token_id:
+            break
+
+    if was_training:
+        model.train()
+    return tokenizer.decode(input_ids[0], skip_special_tokens=True)
+
+
+def _write_training_report(path, result, config, model, device_description, sample_text=None):
+    records = result.get("metrics_history", [])
+    best_val = _best_val_record(records)
+    final_metrics = result.get("final_metrics", {})
+    avg_tokens_per_sec = _average_metric(records, "tokens_per_sec")
+    total_params = count_parameters(_unwrap_model(model))
+
+    lines = [
+        "# Training Report",
+        "",
+        "## Run",
+        "",
+        f"- device: {device_description}",
+        f"- total_parameters: {total_params:,}",
+        f"- train_tokens_target: {config.train_tokens:,}",
+        f"- tokens_seen: {result.get('tokens_seen', 0):,}",
+        f"- steps: {result.get('steps', 0):,}",
+        f"- training_time: {format_time(result.get('training_time', 0))}",
+    ]
+    if avg_tokens_per_sec is not None:
+        lines.append(f"- average_logged_tokens_per_sec: {avg_tokens_per_sec:.2f}")
+
+    lines.extend(
+        [
+            "",
+            "## Config",
+            "",
+            f"- d_model: {config.d_model}",
+            f"- n_heads: {config.n_heads}",
+            f"- n_kv_heads: {config.n_kv_heads}",
+            f"- n_layers: {config.n_layers}",
+            f"- d_ff: {config.d_ff}",
+            f"- max_seq_len: {config.max_seq_len}",
+            f"- vocab_size: {config.vocab_size}",
+            f"- batch_size: {config.batch_size}",
+            f"- gradient_accumulation_steps: {config.gradient_accumulation_steps}",
+            f"- schedule_type: {config.schedule_type}",
+        ]
+    )
+
+    lines.extend(["", "## Evaluation", ""])
+    if best_val:
+        lines.append(
+            f"- best_val_loss: {best_val['val_loss']:.4f} "
+            f"at step {best_val.get('step', 'unknown')}"
+        )
+    if "val_loss" in final_metrics:
+        lines.append(f"- final_val_loss: {final_metrics['val_loss']:.4f}")
+    if "val_perplexity" in final_metrics:
+        lines.append(f"- final_val_perplexity: {final_metrics['val_perplexity']:.4f}")
+    if "val_accuracy" in final_metrics:
+        lines.append(f"- final_val_accuracy: {final_metrics['val_accuracy']:.4f}")
+    if not best_val and not final_metrics:
+        lines.append("- no validation loader was provided")
+
+    lines.extend(["", "## Sample", ""])
+    if sample_text:
+        lines.extend(["```text", sample_text, "```"])
+    else:
+        lines.append("No sample was generated for this run.")
+
+    path.write_text("\n".join(lines) + "\n")
+
+
 def train_model(
     model,
     config,
@@ -183,6 +402,10 @@ def train_model(
     output_dir=None,
     extra_config=None,
     log_every=100,
+    resume_state=None,
+    report_tokenizer_name=None,
+    report_prompt=None,
+    report_max_new_tokens=50,
 ):
     device = resolve_device(config.device)
     if device.type == "cuda":
@@ -195,6 +418,8 @@ def train_model(
 
     schedulers = schedulers or []
     scaler = _build_grad_scaler(device, amp_dtype, config.use_amp)
+    if resume_state and resume_state.get("scaler_state_dict") and scaler.is_enabled():
+        scaler.load_state_dict(resume_state["scaler_state_dict"])
     if scaler.is_enabled():
         print("AMP: fp16 autocast with GradScaler enabled.")
     elif config.use_amp and device.type == "cuda":
@@ -205,20 +430,24 @@ def train_model(
     if output_path is not None:
         output_path.mkdir(parents=True, exist_ok=True)
         metrics_jsonl_path = output_path / "metrics.jsonl"
-        metrics_jsonl_path.write_text("")
+        if not resume_state:
+            metrics_jsonl_path.write_text("")
 
     model.train()
     start_time = time.time()
     last_log_time = start_time
-    last_log_tokens = 0
-    last_log_step = 0
-    tokens_seen = 0
-    steps = 0
-    micro_steps = 0
+    last_log_tokens = int(resume_state.get("tokens_seen", 0)) if resume_state else 0
+    last_log_step = int(resume_state.get("steps", 0)) if resume_state else 0
+    tokens_seen = int(resume_state.get("tokens_seen", 0)) if resume_state else 0
+    steps = int(resume_state.get("steps", 0)) if resume_state else 0
+    micro_steps = int(resume_state.get("micro_steps", 0)) if resume_state else 0
     last_loss = None
-    metrics_history = []
-    eval_seen = set()
-    progress = tqdm(total=config.train_tokens, unit="tok")
+    metrics_history = list(resume_state.get("metrics_history", [])) if resume_state else []
+    eval_seen = set(resume_state.get("eval_seen", [])) if resume_state else set()
+    previous_training_time = float(resume_state.get("training_time", 0.0)) if resume_state else 0.0
+    progress = tqdm(total=config.train_tokens, initial=min(tokens_seen, config.train_tokens), unit="tok")
+    if resume_state:
+        print(f"Resuming from step={steps:,}, tokens_seen={tokens_seen:,}.")
 
     while tokens_seen < config.train_tokens:
         for batch in train_loader:
@@ -278,7 +507,7 @@ def train_model(
                 if should_log:
                     now = time.time()
                     elapsed_since_log = max(1e-9, now - last_log_time)
-                    elapsed_total = max(1e-9, now - start_time)
+                    elapsed_total = previous_training_time + max(1e-9, now - start_time)
                     log_step_delta = max(1, steps - last_log_step)
                     record = {
                         "type": "train",
@@ -295,6 +524,22 @@ def train_model(
                     record.update(_current_lrs(optimizers))
                     metrics_history.append(record)
                     _append_jsonl(metrics_jsonl_path, record)
+                    if output_path is not None:
+                        _save_training_checkpoint(
+                            output_path / "training_state.pt",
+                            model,
+                            config,
+                            optimizers,
+                            schedulers,
+                            scaler,
+                            steps,
+                            tokens_seen,
+                            micro_steps,
+                            metrics_history,
+                            eval_seen,
+                            elapsed_total,
+                            extra_config,
+                        )
                     progress.set_postfix(
                         {
                             "loss": f"{last_loss:.4f}",
@@ -313,12 +558,28 @@ def train_model(
                             "type": "eval",
                             "step": steps,
                             "tokens_seen": tokens_seen,
-                            "elapsed_seconds": time.time() - start_time,
+                            "elapsed_seconds": previous_training_time + (time.time() - start_time),
                         }
                     )
                     metrics.update(_current_lrs(optimizers))
                     metrics_history.append(metrics)
                     _append_jsonl(metrics_jsonl_path, metrics)
+                    if output_path is not None:
+                        _save_training_checkpoint(
+                            output_path / "training_state.pt",
+                            model,
+                            config,
+                            optimizers,
+                            schedulers,
+                            scaler,
+                            steps,
+                            tokens_seen,
+                            micro_steps,
+                            metrics_history,
+                            eval_seen,
+                            metrics["elapsed_seconds"],
+                            extra_config,
+                        )
                     print(f"eval step={steps} tokens={tokens_seen:,} loss={metrics['val_loss']:.4f}")
                     if early_stopper is not None and early_stopper(metrics["val_loss"], steps):
                         tokens_seen = config.train_tokens
@@ -333,14 +594,14 @@ def train_model(
                 "type": "final_eval",
                 "step": steps,
                 "tokens_seen": tokens_seen,
-                "elapsed_seconds": time.time() - start_time,
+                "elapsed_seconds": previous_training_time + (time.time() - start_time),
             }
         )
         final_metrics.update(_current_lrs(optimizers))
         metrics_history.append(final_metrics)
         _append_jsonl(metrics_jsonl_path, final_metrics)
 
-    training_time = time.time() - start_time
+    training_time = previous_training_time + (time.time() - start_time)
     result = {
         "model": model,
         "final_metrics": final_metrics,
@@ -361,12 +622,48 @@ def train_model(
         }
         (output_path / "metrics.json").write_text(json.dumps(serializable, indent=2, default=_json_default))
         _write_metrics_csv(output_path / "metrics.csv", metrics_history)
+        _save_training_checkpoint(
+            output_path / "training_state.pt",
+            model,
+            config,
+            optimizers,
+            schedulers,
+            scaler,
+            steps,
+            tokens_seen,
+            micro_steps,
+            metrics_history,
+            eval_seen,
+            training_time,
+            extra_config,
+        )
         torch.save(
             {
                 "model_state_dict": _unwrap_model(model).state_dict(),
                 "config": config.__dict__,
             },
             output_path / "model.pt",
+        )
+        sample_text = None
+        if report_prompt and report_tokenizer_name:
+            try:
+                sample_text = _generate_report_sample(
+                    model=model,
+                    config=config,
+                    device=device,
+                    tokenizer_name=report_tokenizer_name,
+                    prompt=report_prompt,
+                    max_new_tokens=report_max_new_tokens,
+                )
+            except Exception as exc:
+                sample_text = f"Sample generation failed: {exc}"
+        _write_training_report(
+            output_path / "training_report.md",
+            result,
+            config,
+            model,
+            describe_device(device),
+            sample_text=sample_text,
         )
 
     return result
@@ -432,9 +729,14 @@ def train_minimal_llm(
     val_loader,
     output_dir=None,
     load_weights_path=None,
+    resume_checkpoint=None,
     compare_baseline=False,
+    report_tokenizer_name=None,
+    report_prompt=None,
+    report_max_new_tokens=50,
 ):
     set_seed(42)
+    resume_state = _load_training_state(resume_checkpoint)
     model = MinimalLLM(config)
     device = resolve_device(config.device)
     if device.type == "cuda":
@@ -442,8 +744,15 @@ def train_minimal_llm(
     else:
         model.to(device)
 
-    if load_weights_path:
-        checkpoint = torch.load(load_weights_path, map_location="cpu")
+    if resume_state is not None:
+        state_dict = _strip_compile_prefix(resume_state["model_state_dict"])
+        model.load_state_dict(state_dict, strict=False)
+        _restore_rng_state(resume_state.get("rng_state"))
+    elif load_weights_path:
+        try:
+            checkpoint = torch.load(load_weights_path, map_location="cpu", weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(load_weights_path, map_location="cpu")
         state_dict = _strip_compile_prefix(checkpoint.get("model_state_dict", checkpoint))
         model.load_state_dict(state_dict, strict=False)
 
@@ -471,7 +780,14 @@ def train_minimal_llm(
 
     optimizers = setup_muon_optimizer(model, config)
     schedulers = _build_schedulers(optimizers, config)
-    set_seed(42)
+    if resume_state is not None:
+        for optimizer, state_dict in zip(optimizers, resume_state.get("optimizer_state_dicts", [])):
+            optimizer.load_state_dict(state_dict)
+        for scheduler, state_dict in zip(schedulers, resume_state.get("scheduler_state_dicts", [])):
+            scheduler.load_state_dict(state_dict)
+        _restore_rng_state(resume_state.get("rng_state"))
+    else:
+        set_seed(42)
     result = train_model(
         model=model,
         config=config,
@@ -482,6 +798,10 @@ def train_minimal_llm(
         output_dir=output_dir,
         extra_config={"compare_baseline": compare_baseline},
         log_every=config.log_every,
+        resume_state=resume_state,
+        report_tokenizer_name=report_tokenizer_name,
+        report_prompt=report_prompt,
+        report_max_new_tokens=report_max_new_tokens,
     )
 
     plots_dir = Path("plots")
