@@ -169,21 +169,26 @@ def prepare_text_dataset(
     if target_tokens is not None and target_tokens <= 0:
         raise ValueError("--target_tokens must be positive when provided.")
 
-    output_path = Path(output_dir)
-    if output_path.exists() and any(output_path.iterdir()):
-        if not overwrite:
-            raise FileExistsError(
-                f"{output_path} already exists and is not empty. "
-                "Pass --overwrite to replace it."
-            )
-        shutil.rmtree(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
     files = discover_input_files(input_dir, input_file, recursive)
+    output_path = Path(output_dir)
+    if output_path.exists() and not output_path.is_dir():
+        raise NotADirectoryError(f"{output_path} exists and is not a directory.")
+    output_exists = output_path.exists() and any(output_path.iterdir())
+    if output_exists and not overwrite:
+        raise FileExistsError(
+            f"{output_path} already exists and is not empty. "
+            "Pass --overwrite to replace it."
+        )
+
     tokenizer = setup_tokenizer(
         tokenizer_name,
         use_fast=use_fast,
         trust_remote_code=trust_remote_code,
     )
+
+    if output_exists:
+        shutil.rmtree(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as tmp:
         tmp_path = Path(tmp.name)

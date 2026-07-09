@@ -1,7 +1,7 @@
 import argparse
+import sys
 import warnings
 from pathlib import Path
-import sys
 
 warnings.filterwarnings(
     "ignore",
@@ -20,6 +20,13 @@ from models import MinimalLLM
 from training import resolve_device
 
 
+def _load_checkpoint(path):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
 def _config_from_checkpoint(checkpoint):
     cfg_dict = checkpoint.get("config", {})
     valid = LLMConfig.__dataclass_fields__.keys()
@@ -28,7 +35,7 @@ def _config_from_checkpoint(checkpoint):
 
 
 def load_model(checkpoint_path, device_name="auto"):
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = _load_checkpoint(checkpoint_path)
     config = _config_from_checkpoint(checkpoint) if isinstance(checkpoint, dict) else LLMConfig()
     config.device = device_name
     state_dict = checkpoint.get("model_state_dict", checkpoint)
