@@ -5,6 +5,7 @@ from .loader import (
     setup_tokenizer,
     tokenize_and_chunk,
 )
+from .prepare_text_data import prepare_text_dataset
 
 __all__ = [
     "setup_tokenizer",
@@ -12,4 +13,5 @@ __all__ = [
     "tokenize_and_chunk",
     "finalize_dataset",
     "prepare_datasets",
+    "prepare_text_dataset",
 ]

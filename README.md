@@ -51,6 +51,27 @@ To download the Blueberry pretraining dataset:
 uv run python data/download_hf_data.py
 ```
 
+To prepare your own local text dataset, put `.txt`, `.jsonl`, or `.csv` files in a folder. For JSONL/CSV, the default text column is `text`:
+
+```bash
+uv run python data/prepare_text_data.py \
+  --input_dir my_texts \
+  --output_dir processed_data/domain_text \
+  --max_seq_len 512
+```
+
+Then train against that saved dataset:
+
+```bash
+uv run python train_llm.py \
+  --config 5m \
+  --device cuda \
+  --dataset_path processed_data/domain_text \
+  --max_seq_len 512
+```
+
+For private or domain-specific data, clean the source text first, remove secrets or personal information, and keep the dataset on storage you control.
+
 ## Training
 
 CPU smoke run:
