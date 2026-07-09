@@ -151,6 +151,14 @@ def main():
     args = parser.parse_args()
     if args.load_checkpoint and args.resume_checkpoint:
         raise SystemExit("Use either --load_checkpoint or --resume_checkpoint, not both.")
+    for name in ("train_tokens", "batch_size", "gradient_accumulation_steps", "max_seq_len", "eval_every"):
+        value = getattr(args, name)
+        if value is not None and value <= 0:
+            raise SystemExit(f"--{name} must be positive when provided.")
+    if args.log_every <= 0:
+        raise SystemExit("--log_every must be positive.")
+    if args.report_max_new_tokens < 0:
+        raise SystemExit("--report_max_new_tokens must be non-negative.")
 
     set_seed(args.seed)
     config_cls = import_config_class(args.config_class) if args.config_class else CONFIGS[args.config]
@@ -252,6 +260,7 @@ def main():
         report_tokenizer_name=data_cfg.tokenizer_name,
         report_prompt=args.report_prompt,
         report_max_new_tokens=args.report_max_new_tokens,
+        seed=args.seed,
     )
 
 

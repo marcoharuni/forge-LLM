@@ -176,6 +176,26 @@ def _write_metrics_csv(path: Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def _optimizer_step(model, optimizers, schedulers, scaler, grad_clip):
+    if scaler.is_enabled():
+        for optimizer in optimizers:
+            scaler.unscale_(optimizer)
+    total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    if scaler.is_enabled():
+        for optimizer in optimizers:
+            scaler.step(optimizer)
+        scaler.update()
+        for optimizer in optimizers:
+            optimizer.zero_grad(set_to_none=True)
+    else:
+        for optimizer in optimizers:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+    for scheduler in schedulers:
+        scheduler.step()
+    return total_grad_norm
+
+
 def _rng_state():
     state = {
         "python": random.getstate(),
@@ -450,7 +470,9 @@ def train_model(
         print(f"Resuming from step={steps:,}, tokens_seen={tokens_seen:,}.")
 
     while tokens_seen < config.train_tokens:
+        made_progress = False
         for batch in train_loader:
+            made_progress = True
             if tokens_seen >= config.train_tokens:
                 break
             x, y = _batch_to_tensors(batch)
@@ -479,25 +501,13 @@ def train_model(
             progress.update(batch_tokens)
 
             if micro_steps % config.gradient_accumulation_steps == 0:
-                if scaler.is_enabled():
-                    for optimizer in optimizers:
-                        scaler.unscale_(optimizer)
-                total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(),
+                total_grad_norm = _optimizer_step(
+                    model,
+                    optimizers,
+                    schedulers,
+                    scaler,
                     config.grad_clip,
                 )
-                if scaler.is_enabled():
-                    for optimizer in optimizers:
-                        scaler.step(optimizer)
-                    scaler.update()
-                    for optimizer in optimizers:
-                        optimizer.zero_grad(set_to_none=True)
-                else:
-                    for optimizer in optimizers:
-                        optimizer.step()
-                        optimizer.zero_grad(set_to_none=True)
-                for scheduler in schedulers:
-                    scheduler.step()
                 steps += 1
 
                 should_log = steps % log_every == 0
@@ -584,6 +594,19 @@ def train_model(
                     if early_stopper is not None and early_stopper(metrics["val_loss"], steps):
                         tokens_seen = config.train_tokens
                         break
+        if not made_progress:
+            raise RuntimeError("train_loader produced no batches; cannot train.")
+
+    if micro_steps > 0 and micro_steps % config.gradient_accumulation_steps != 0:
+        _optimizer_step(
+            model,
+            optimizers,
+            schedulers,
+            scaler,
+            config.grad_clip,
+        )
+        steps += 1
+        micro_steps = 0
 
     progress.close()
     final_metrics = {}
@@ -734,8 +757,9 @@ def train_minimal_llm(
     report_tokenizer_name=None,
     report_prompt=None,
     report_max_new_tokens=50,
+    seed=42,
 ):
-    set_seed(42)
+    set_seed(seed)
     resume_state = _load_training_state(resume_checkpoint)
     model = MinimalLLM(config)
     device = resolve_device(config.device)
@@ -787,7 +811,7 @@ def train_minimal_llm(
             scheduler.load_state_dict(state_dict)
         _restore_rng_state(resume_state.get("rng_state"))
     else:
-        set_seed(42)
+        set_seed(seed)
     result = train_model(
         model=model,
         config=config,

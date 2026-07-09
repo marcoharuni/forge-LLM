@@ -47,8 +47,12 @@ def main():
 
     set_seed(args.seed)
     run_dir = Path(args.output_dir)
+    if run_dir.exists() and not run_dir.is_dir():
+        raise SystemExit(f"{run_dir} exists and is not a directory.")
     if run_dir.exists() and args.overwrite:
         shutil.rmtree(run_dir)
+    if run_dir.exists() and any(run_dir.iterdir()) and not args.overwrite:
+        raise SystemExit(f"{run_dir} already exists and is not empty. Pass --overwrite to replace it.")
     run_dir.mkdir(parents=True, exist_ok=True)
 
     text_dir = run_dir / "texts"
@@ -107,6 +111,7 @@ def main():
         report_tokenizer_name=args.tokenizer_name,
         report_prompt=args.prompt,
         report_max_new_tokens=args.max_new_tokens,
+        seed=args.seed,
     )
 
     print("\nGenerated sample:")
