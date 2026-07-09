@@ -128,6 +128,7 @@ def main():
     parser.add_argument("--train_tokens", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
+    parser.add_argument("--max_seq_len", type=int, default=None)
     parser.add_argument("--compile", type=str_to_bool, default=None)
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--dataset_path", default=None)
@@ -149,6 +150,7 @@ def main():
         ("train_tokens", "train_tokens"),
         ("batch_size", "batch_size"),
         ("gradient_accumulation_steps", "gradient_accumulation_steps"),
+        ("max_seq_len", "max_seq_len"),
         ("eval_every", "eval_every"),
     ]:
         value = getattr(args, arg_name)

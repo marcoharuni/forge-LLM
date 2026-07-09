@@ -215,6 +215,8 @@ In Colab:
 4. If the UI offers GPU class selection, choose **A100**.
 5. Verify the GPU:
 
+Colab shell commands start with `!`. In a normal Ubuntu terminal, run the same commands without `!`.
+
 ```python
 !nvidia-smi
 ```
@@ -266,23 +268,36 @@ if hf_token:
     os.environ["HF_TOKEN"] = hf_token
 ```
 
-Prepare a small dataset:
+Prepare a small dataset. This is a smoke dataset for testing the full loop on a T4 or A100, not a quality dataset:
 
 ```python
 !uv run python data/prepare_mix_data.py --target_tokens 1000000 --max_seq_len 512
 ```
 
-Start with a small CUDA run:
+Train the 5m model on CUDA:
 
 ```python
 !uv run python train_llm.py \
   --config 5m \
   --train_tokens 50000 \
   --batch_size 2 \
+  --max_seq_len 512 \
   --device cuda \
   --compile false \
   --dataset_path processed_data/pretrain_mix_1000000
 ```
+
+Generate text from the checkpoint:
+
+```python
+!uv run python generation/generate.py \
+  --checkpoint checkpoints/model.pt \
+  --prompt "The future of language models" \
+  --max_new_tokens 50 \
+  --device cuda
+```
+
+The generated text from a tiny smoke run may be messy. That is expected. The purpose of this path is to prove that data preparation, training, checkpointing, and generation all work. Better text requires more tokens and a longer run.
 
 Colab VMs are temporary. Download your outputs before disconnecting, or copy them to Google Drive:
 
