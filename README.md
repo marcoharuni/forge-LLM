@@ -1,6 +1,6 @@
 # forge-LLM
 
-A Research-Grade Guide to Architecture, Data, Training, Optimization, and Debugging of a small language model written entirely in Pytorch**.
+A Research-Grade Guide to Architecture, Data, Training, Optimization, and Debugging of a small language model written entirely in Pytorch.
 
 forge-LLM is a clean PyTorch reference implementation for small decoder-only LLM pretraining research. It is meant to be readable, runnable, and easy to modify: swap model sizes, optimizers, datasets, and devices, then run a token-budgeted from-scratch experiment on CPU, Apple MPS, or CUDA.
 
